@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gunslash Arena · kevin9327</title>
+<meta name="description" content="A third-person wall-running sword-and-gun arena in the browser. Original three.js, no install, bots to fight." />
+<meta property="og:title" content="Gunslash Arena" />
+<meta property="og:description" content="Wall-run, dash, slash and shoot. A browser arena built from scratch in three.js." />
+<meta property="og:image" content="https://kevin9327.github.io/arena/preview.png" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23f97316'/%3E%3Ccircle cx='32' cy='32' r='14' fill='none' stroke='%23fff' stroke-width='6'/%3E%3Cpath d='M32 2v12M32 50v12M2 32h12M50 32h12' stroke='%23fff' stroke-width='6'/%3E%3C/svg%3E" />
+<style>
+  :root { --pink:#ec4899; --orange:#f97316; --yellow:#facc15; --ink:#0d1117; --mute:#8b949e; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:#000; color:#e6edf3; font:13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow:hidden; user-select:none; }
+  #app { position:fixed; inset:0; }
+  canvas { display:block; }
+  .hud { position:fixed; z-index:2; pointer-events:none; }
+  #cross { left:50%; top:50%; width:22px; height:22px; margin:-11px 0 0 -11px; }
+  #cross::before, #cross::after { content:""; position:absolute; background:#fff; box-shadow:0 0 4px #000; }
+  #cross::before { left:10px; top:0; width:2px; height:22px; }
+  #cross::after { top:10px; left:0; width:22px; height:2px; }
+  #cross.hot::before, #cross.hot::after { background:var(--yellow); }
+  #topleft { left:22px; top:18px; width:280px; }
+  .emblem { display:flex; align-items:center; gap:10px; }
+  .emblem .z { width:44px; height:44px; border-radius:8px; background:linear-gradient(135deg, var(--pink), var(--orange) 60%, var(--yellow)); display:grid; place-items:center; font-weight:900; font-size:26px; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.5); }
+  .bars { flex:1; }
+  .bar { height:12px; background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.18); border-radius:3px; overflow:hidden; margin-bottom:5px; position:relative; }
+  .bar i { display:block; height:100%; width:100%; transition:width .12s; }
+  #hp i { background:linear-gradient(90deg, #ef4444, #f97316); }
+  #st i { background:linear-gradient(90deg, #58a6ff, #a371f7); }
+  .bar b { position:absolute; right:6px; top:-1px; font-size:10px; font-weight:700; text-shadow:0 1px 2px #000; }
+  #name { font-weight:800; font-size:14px; margin-top:4px; text-shadow:0 1px 2px #000; }
+  #topright { right:22px; top:18px; text-align:right; }
+  #topright b { font-size:26px; font-weight:900; text-shadow:0 2px 4px #000; letter-spacing:-.02em; }
+  #topright span { display:block; color:var(--mute); font-size:11px; text-transform:uppercase; letter-spacing:.1em; }
+  #feed { right:22px; top:84px; text-align:right; font-size:12px; }
+  #feed div { background:rgba(0,0,0,.45); padding:3px 8px; border-radius:4px; margin:3px 0; display:inline-block; }
+  #feed div.me { border-right:3px solid var(--orange); }
+  #weapon { right:22px; bottom:22px; text-align:right; }
+  #weapon b { display:block; font-size:34px; font-weight:900; text-shadow:0 2px 4px #000; }
+  #weapon span { color:var(--mute); font-size:11px; text-transform:uppercase; letter-spacing:.1em; }
+  #weapon .w { display:inline-block; padding:3px 9px; border:1px solid rgba(255,255,255,.25); border-radius:999px; margin-left:6px; font-size:11px; color:#e6edf3; }
+  #weapon .w.on { background:var(--orange); border-color:var(--orange); color:#fff; font-weight:700; }
+  #keys { left:22px; bottom:22px; background:rgba(0,0,0,.5); border:1px solid rgba(255,255,255,.12); border-radius:8px; padding:8px 10px; font-family:ui-monospace, Consolas, monospace; font-size:10px; }
+  #keys .row { display:flex; gap:4px; margin:3px 0; }
+  #keys .k { min-width:22px; height:20px; padding:0 6px; display:grid; place-items:center; border-radius:4px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); color:#c9d1d9; }
+  #keys .k.on { background:var(--orange); border-color:var(--orange); color:#fff; font-weight:700; }
+  #keys .k.wide { min-width:64px; }
+  #keys .mouse { display:flex; gap:4px; margin-left:12px; }
+  #keys .stat { color:var(--mute); margin-top:4px; }
+  #keys .stat b { color:var(--yellow); }
+  #vig { inset:0; box-shadow:inset 0 0 120px rgba(239,68,68,0); transition:box-shadow .15s; }
+  #vig.hit { box-shadow:inset 0 0 160px rgba(239,68,68,.75); }
+  #hint { left:50%; bottom:22px; transform:translateX(-50%); color:var(--mute); font-size:11px; }
+  .overlay { position:fixed; inset:0; z-index:5; display:grid; place-items:center; background:rgba(4,4,10,.78); backdrop-filter:blur(4px); }
+  .card { max-width:560px; padding:28px 32px; border:1px solid rgba(255,255,255,.14); border-radius:14px; background:rgba(13,17,23,.92); }
+  .card h1 { margin:0 0 4px; font-size:34px; font-weight:900; letter-spacing:-.02em; background:linear-gradient(90deg, var(--pink), var(--orange) 55%, var(--yellow)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .card p { margin:6px 0; color:var(--mute); }
+  .card table { border-collapse:collapse; margin:12px 0; font-size:12px; }
+  .card td { padding:3px 10px 3px 0; color:#c9d1d9; }
+  .card td:first-child { color:var(--yellow); font-family:ui-monospace, Consolas, monospace; white-space:nowrap; }
+  .card .go { display:inline-block; margin-top:8px; padding:10px 18px; border-radius:999px; background:var(--orange); color:#fff; font-weight:800; cursor:pointer; border:0; font-size:14px; }
+  .card .go:hover { background:var(--pink); }
+  .card .opts { margin-top:10px; font-size:12px; color:var(--mute); }
+  .card .opts a { color:#e6edf3; margin-right:10px; }
+  .card .foot { margin-top:12px; font-size:11px; color:var(--mute); }
+  .card .foot a { color:#e6edf3; }
+  #dead { display:none; }
+  #dead .card { text-align:center; }
+  #dead h1 { color:#ef4444; -webkit-text-fill-color:#ef4444; background:none; }
+  @media (max-width:760px) { #keys, #hint { display:none; } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div class="hud" id="cross"></div>
+<div class="hud" id="vig"></div>
+
+<div class="hud" id="topleft">
+  <div class="emblem"><div class="z">Z</div>
+    <div class="bars">
+      <div class="bar" id="hp"><i></i><b>100</b></div>
+      <div class="bar" id="st"><i></i><b>100</b></div>
+    </div></div>
+  <div id="name">Kevin</div>
+</div>
+
+<div class="hud" id="topright"><b id="kills">0</b><span>kills</span><span id="clock">00:00 · 0 deaths</span></div>
+<div class="hud" id="feed"></div>
+
+<div class="hud" id="weapon"><b id="ammo">12</b><span id="ammo-l">rounds</span><div><span class="w" id="w-sword">⚔ sword</span><span class="w on" id="w-gun">✦ gun</span></div></div>
+
+<div class="hud" id="keys">
+  <div class="row"><span class="k" data-k="Escape">esc</span><span class="k" data-k="Digit1">1</span><span class="k" data-k="Digit2">2</span><span class="k" data-k="Digit3">3</span><span class="k" data-k="Digit4">4</span></div>
+  <div class="row"><span class="k" data-k="Tab">tab</span><span class="k" data-k="KeyQ">Q</span><span class="k" data-k="KeyW">W</span><span class="k" data-k="KeyE">E</span><span class="k" data-k="KeyR">R</span><span class="k" data-k="KeyT">T</span>
+    <span class="mouse"><span class="k" data-k="MouseL">L</span><span class="k" data-k="MouseR">R</span></span></div>
+  <div class="row"><span class="k" data-k="CapsLock">caps</span><span class="k" data-k="KeyA">A</span><span class="k" data-k="KeyS">S</span><span class="k" data-k="KeyD">D</span><span class="k" data-k="KeyF">F</span><span class="k" data-k="KeyG">G</span></div>
+  <div class="row"><span class="k" data-k="ShiftLeft">shift</span><span class="k" data-k="KeyZ">Z</span><span class="k" data-k="KeyX">X</span><span class="k" data-k="KeyC">C</span><span class="k" data-k="KeyV">V</span><span class="k" data-k="KeyB">B</span></div>
+  <div class="row"><span class="k" data-k="ControlLeft">ctrl</span><span class="k" data-k="AltLeft">alt</span><span class="k wide" data-k="Space">space</span></div>
+  <div class="stat"><b id="apm">0</b> apm · <b id="fps">0</b> fps</div>
+</div>
+
+<div class="hud" id="hint">Q swap weapon · right-click uses the other one · shift dash · space in the air = double jump · run at a wall and jump off it</div>
+
+<div class="overlay" id="start">
+  <div class="card">
+    <h1>Gunslash Arena</h1>
+    <p>A third-person wall-running sword-and-gun arena, built from scratch in three.js. No install, no assets, everything on screen is generated in code.</p>
+    <table>
+      <tr><td>W A S D</td><td>move</td></tr>
+      <tr><td>mouse</td><td>look · left click attacks with the weapon in hand · right click with the other one</td></tr>
+      <tr><td>space</td><td>jump · again in the air to double jump · against a wall to wall-run, then jump off</td></tr>
+      <tr><td>shift</td><td>dash</td></tr>
+      <tr><td>Q / wheel</td><td>swap sword and gun</td></tr>
+      <tr><td>R</td><td>reload</td></tr>
+    </table>
+    <button class="go" id="play">Click to play</button>
+    <div class="opts">bots: <a href="?bots=4">4</a><a href="?bots=8">8</a><a href="?bots=12">12</a><a href="?bots=20">20</a></div>
+    <div class="foot">Original work, nothing borrowed. <a href="https://github.com/kevin9327/kevin9327.github.io/tree/main/arena">source</a> · <a href="https://github.com/kevin9327">kevin9327</a></div>
+  </div>
+</div>
+
+<div class="overlay" id="dead"><div class="card"><h1>Down</h1><p id="dead-by">taken out</p><p>Respawning in <b id="dead-t">3</b>…</p></div></div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script type="module" src="./game.js"></script>
+</body>
+</html>
