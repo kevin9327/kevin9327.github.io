@@ -16,11 +16,25 @@
   #app { position:fixed; inset:0; }
   canvas { display:block; }
   .hud { position:fixed; z-index:2; pointer-events:none; }
-  #cross { left:50%; top:50%; width:22px; height:22px; margin:-11px 0 0 -11px; }
+  #cross { left:50%; top:50%; width:22px; height:22px; margin:-11px 0 0 -11px; transform-origin:center; }
   #cross::before, #cross::after { content:""; position:absolute; background:#fff; box-shadow:0 0 4px #000; }
   #cross::before { left:10px; top:0; width:2px; height:22px; }
   #cross::after { top:10px; left:0; width:22px; height:2px; }
   #cross.hot::before, #cross.hot::after { background:var(--yellow); }
+  #cross.mark { outline:2px solid #fff; outline-offset:6px; border-radius:50%; }
+  .bar.seg i { background-image:repeating-linear-gradient(90deg, transparent 0 9px, rgba(0,0,0,.45) 9px 11px) !important; }
+  #hp.seg i { background-color:#f0452c; } #st.seg i { background-color:#6b8cff; }
+  #topright em { font-style:normal; color:#e6edf3; }
+  #feed div b { color:var(--yellow); } #feed div i { font-style:normal; color:#fff; margin:0 4px; }
+  #board { inset:0; display:none; place-items:center; }
+  #board .card { padding:18px 24px; min-width:320px; }
+  #board h2 { margin:0 0 8px; font-size:16px; letter-spacing:.08em; text-transform:uppercase; color:var(--yellow); }
+  #board table { width:100%; border-collapse:collapse; font-size:13px; }
+  #board th { text-align:left; color:var(--mute); font-weight:600; padding:4px 8px; border-bottom:1px solid rgba(255,255,255,.12); }
+  #board td { padding:4px 8px; }
+  #board tr.me td { color:var(--orange); font-weight:700; }
+  #board td i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:-1px; }
+  #board p { margin:8px 0 0; color:var(--mute); font-size:11px; }
   #topleft { left:22px; top:18px; width:280px; }
   .emblem { display:flex; align-items:center; gap:10px; }
   .emblem .z { width:44px; height:44px; border-radius:8px; background:linear-gradient(135deg, var(--pink), var(--orange) 60%, var(--yellow)); display:grid; place-items:center; font-weight:900; font-size:26px; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.5); }
@@ -81,16 +95,18 @@
 <div class="hud" id="topleft">
   <div class="emblem"><div class="z">Z</div>
     <div class="bars">
-      <div class="bar" id="hp"><i></i><b>100</b></div>
-      <div class="bar" id="st"><i></i><b>100</b></div>
+      <div class="bar seg" id="hp"><i></i><b><span id="hp-n">100</span> HP</b></div>
+      <div class="bar seg" id="st"><i></i><b><span id="st-n">100</span> AP</b></div>
     </div></div>
   <div id="name">Kevin</div>
 </div>
 
-<div class="hud" id="topright"><b id="kills">0</b><span>kills</span><span id="clock">00:00 · 0 deaths</span></div>
+<div class="hud" id="topright"><b id="kills">0</b><span>kills</span><span><em id="clock">00:00</em> · K/D <em id="kd">0 / 0</em></span></div>
 <div class="hud" id="feed"></div>
 
-<div class="hud" id="weapon"><b id="ammo">12</b><span id="ammo-l">rounds</span><div><span class="w" id="w-sword">⚔ sword</span><span class="w on" id="w-gun">✦ gun</span></div></div>
+<div class="hud" id="weapon"><b id="ammo">12</b><span id="ammo-l">rounds · ∞</span><div><span class="w" id="w-sword">⚔ sword</span><span class="w on" id="w-gun">✦ gun</span></div></div>
+
+<div class="hud" id="board"><div class="card"><h2>Scoreboard</h2><table><thead><tr><th>#</th><th>fighter</th><th>K</th><th>D</th></tr></thead><tbody id="board-rows"></tbody></table><p>hold Tab</p></div></div>
 
 <div class="hud" id="keys">
   <div class="row"><span class="k" data-k="Escape">esc</span><span class="k" data-k="Digit1">1</span><span class="k" data-k="Digit2">2</span><span class="k" data-k="Digit3">3</span><span class="k" data-k="Digit4">4</span></div>
