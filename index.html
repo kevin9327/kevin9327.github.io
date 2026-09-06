@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>kevin9327 · a year of commits, in 3D</title>
+<meta name="description" content="Every day of the last year on GitHub, standing up as a tower. Real contribution data, rendered live in WebGL." />
+<meta property="og:title" content="kevin9327 · a year of commits, in 3D" />
+<meta property="og:description" content="Real contribution data, rendered live in WebGL. Drag to orbit, hover a tower for the day." />
+<meta property="og:image" content="https://kevin9327.github.io/preview.png" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' x2='1'%3E%3Cstop offset='0' stop-color='%23ec4899'/%3E%3Cstop offset='1' stop-color='%23f97316'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='32' cy='32' r='30' fill='url(%23g)'/%3E%3Ccircle cx='32' cy='32' r='14' fill='none' stroke='%23fff' stroke-width='6'/%3E%3Cpath d='M32 2v12M32 50v12M2 32h12M50 32h12' stroke='%23fff' stroke-width='6'/%3E%3C/svg%3E" />
+<style>
+  :root { color-scheme: dark; --pink:#ec4899; --orange:#f97316; --yellow:#facc15; --ink:#0d1117; --mute:#8b949e; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--ink); color:#e6edf3; font:14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow:hidden; }
+  #app { position:fixed; inset:0; }
+  canvas { display:block; width:100%; height:100%; }
+  .hud { position:fixed; z-index:2; pointer-events:none; }
+  .hud a, .hud button { pointer-events:auto; }
+  #title { left:24px; top:22px; max-width:min(560px, 80vw); }
+  #title h1 { margin:0; font-size:clamp(22px, 3.2vw, 34px); font-weight:800; letter-spacing:-0.02em;
+    background:linear-gradient(90deg, var(--pink), var(--orange) 55%, var(--yellow)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  #title p { margin:6px 0 0; color:var(--mute); font-size:13px; }
+  #stats { left:24px; bottom:22px; display:flex; gap:22px; }
+  #stats div b { display:block; font-size:22px; font-weight:800; letter-spacing:-0.02em; color:#fff; }
+  #stats div span { font-size:11px; color:var(--mute); text-transform:uppercase; letter-spacing:.08em; }
+  #legend { right:24px; bottom:22px; display:flex; gap:12px; align-items:center; font-size:11px; color:var(--mute); }
+  #legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
+  #links { right:24px; top:22px; display:flex; gap:10px; }
+  #links a, #links button { color:#e6edf3; text-decoration:none; font-size:12px; padding:7px 11px; border:1px solid #30363d; border-radius:999px; background:rgba(13,17,23,.6); backdrop-filter:blur(6px); cursor:pointer; }
+  #links a:hover, #links button:hover { border-color:var(--orange); }
+  #tip { position:fixed; z-index:3; pointer-events:none; padding:8px 10px; border-radius:8px; background:rgba(13,17,23,.92); border:1px solid #30363d; font-size:12px; transform:translate(14px, 14px); display:none; white-space:nowrap; }
+  #tip b { color:var(--yellow); }
+  #hint { left:50%; bottom:64px; transform:translateX(-50%); font-size:12px; color:var(--mute); opacity:.9; transition:opacity .6s; }
+  #loading { position:fixed; inset:0; display:grid; place-items:center; z-index:5; background:var(--ink); color:var(--mute); font-size:13px; letter-spacing:.06em; }
+  @media (max-width:640px) { #legend, #hint { display:none; } #stats { gap:14px; } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="loading">building the skyline…</div>
+
+<div class="hud" id="title">
+  <h1>kevin9327 · a year of commits</h1>
+  <p>Every day of the last 12 months on GitHub, standing up as a tower. Real data, rendered live in WebGL. Drag to orbit, scroll to zoom, hover a tower for the day.</p>
+</div>
+
+<div class="hud" id="links">
+  <button id="spin" title="pause / resume the orbit (space)">⏸ orbit</button>
+  <a href="https://github.com/kevin9327" target="_blank" rel="noopener">GitHub profile ↗</a>
+  <a href="https://github.com/kevin9327/kevin9327" target="_blank" rel="noopener">how it's made ↗</a>
+</div>
+
+<div class="hud" id="stats">
+  <div><b id="s-total">–</b><span>contributions</span></div>
+  <div><b id="s-days">–</b><span>active days</span></div>
+  <div><b id="s-peak">–</b><span>busiest day</span></div>
+  <div><b id="s-streak">–</b><span>longest streak</span></div>
+</div>
+
+<div class="hud" id="legend">
+  <span><i style="background:#3fb950"></i>light</span>
+  <span><i style="background:#58a6ff"></i>steady</span>
+  <span><i style="background:#a371f7"></i>busy</span>
+  <span><i style="background:#f97316"></i>heavy</span>
+  <span><i style="background:#facc15"></i>peak</span>
+</div>
+
+<div class="hud" id="hint">space · pause orbit &nbsp;·&nbsp; r · reset view</div>
+<div id="tip"></div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script type="module" src="./main.js"></script>
+</body>
+</html>

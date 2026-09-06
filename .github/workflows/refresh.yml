@@ -1,0 +1,29 @@
+name: Refresh the contribution calendar
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the last year of contributions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api graphql -f query='{ user(login:"${{ github.repository_owner }}"){ contributionsCollection { contributionCalendar { totalContributions weeks { contributionDays { date contributionCount weekday } } } } } }' > data/contrib.json
+          python3 -c "import json; c=json.load(open('data/contrib.json'))['data']['user']['contributionsCollection']['contributionCalendar']; print(c['totalContributions'], 'contributions,', len(c['weeks']), 'weeks')"
+
+      - name: Commit if the calendar moved
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/contrib.json
+          git diff --cached --quiet && echo "no change" || git commit -m "chore: refresh the contribution calendar" && git push
