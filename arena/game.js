@@ -15,19 +15,25 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { VignetteShader } from 'three/addons/shaders/VignetteShader.js';
+import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as skeletonClone } from 'three/addons/utils/SkeletonUtils.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const Q = new URLSearchParams(location.search);
-const BOT_COUNT = Math.max(0, Math.min(20, parseInt(Q.get('bots') || '8', 10) || 8));
+const BOT_COUNT = Q.has('bots') ? Math.max(0, Math.min(20, parseInt(Q.get('bots'), 10) || 0)) : 8;
 const DEMO = Q.get('demo') === '1';
 const RECORD_FPS = parseInt(Q.get('record') || '0', 10) || 0;
 const POST = Q.get('bloom') !== '0';
 const GOD = Q.get('god') === '1';
+// quality knobs for profiling (?pr=1&msaa=2&shadow=512&adapt=0)
+const PR_CAP = parseFloat(Q.get('pr') || '0') || 0;
+const MSAA = Q.has('msaa') ? (parseInt(Q.get('msaa'), 10) || 0) : 0;
+const SHADOW = Q.has('shadow') ? (parseInt(Q.get('shadow'), 10) || 0) : 1024;
+const ADAPT = Q.get('adapt') !== '0';
 const BOXES = Q.get('boxes') === '1';
 
 const $ = (id) => document.getElementById(id);
@@ -113,24 +119,27 @@ const TEX = {
 
 // ------------------------------------------------------------------ renderer / scene
 const renderer = new THREE.WebGLRenderer({ antialias: !POST, powerPreference: 'high-performance', preserveDrawingBuffer: !!RECORD_FPS });
-renderer.setPixelRatio(RECORD_FPS ? 1 : Math.min(devicePixelRatio, innerWidth * innerHeight > 1_500_000 ? 1 : 1.25));
+// never render above 1:1 device pixels: the game is fill-rate bound on integrated GPUs, and the adaptive scale below only goes down from here
+const BASE_PR = RECORD_FPS ? 1 : (PR_CAP || Math.min(devicePixelRatio, 1));
+renderer.setPixelRatio(BASE_PR);
 renderer.setSize(innerWidth, innerHeight);
-renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.shadowMap.enabled = SHADOW > 0; renderer.shadowMap.type = THREE.PCFShadowMap; renderer.shadowMap.autoUpdate = false;   // refreshed every other frame in the loop
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.95;
 $('app').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x08070c);
 scene.fog = new THREE.Fog(0x0a0810, 40, 120);
-const pmrem = new THREE.PMREMGenerator(renderer);
-scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-scene.environmentIntensity = 0.55;
+// a 64 px cube of the studio room for the few reflective surfaces (gold, steel, polished marble); Lambert materials read it with one cube fetch
+const envRT = new THREE.WebGLCubeRenderTarget(64, { generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
+{ const room = new RoomEnvironment(); new THREE.CubeCamera(0.1, 100, envRT).update(renderer, room); room.dispose(); }
+const envCube = envRT.texture;
 const camera = new THREE.PerspectiveCamera(68, innerWidth / innerHeight, 0.1, 220);
 
 scene.add(new THREE.HemisphereLight(0x8f86d8, 0x2e2216, 0.7));
 const sun = new THREE.DirectionalLight(0xffe2bf, 1.5);
 sun.position.set(14, 34, -10); sun.castShadow = true;
-sun.shadow.mapSize.set(1024, 1024); Object.assign(sun.shadow.camera, { left: -46, right: 46, top: 42, bottom: -42, far: 100 }); sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.02;
+sun.shadow.mapSize.set(SHADOW || 1, SHADOW || 1); Object.assign(sun.shadow.camera, { left: -46, right: 46, top: 42, bottom: -42, far: 100 }); sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.02;
 scene.add(sun);
 
 // ------------------------------------------------------------------ level
@@ -138,28 +147,62 @@ const colliders = [];
 const levelMeshes = [];   // everything solid or big: used for bullets, line of sight and the camera
 const level = new THREE.Group(); scene.add(level);
 const HW = 30, HD = 20, HH = 15, BY = 5, BW = 6;
-const MAT = {
-  stone: new THREE.MeshStandardMaterial({ map: TEX.stone([8, 4]), roughness: 0.95 }),
-  stoneWide: new THREE.MeshStandardMaterial({ map: TEX.stone([16, 4]), roughness: 0.95 }),
-  floor: new THREE.MeshStandardMaterial({ map: TEX.marbleTile([15, 10]), roughness: 0.22, metalness: 0.08, envMapIntensity: 1.2 }),
-  carpet: new THREE.MeshStandardMaterial({ map: TEX.carpet([12, 1]), roughness: 1.0 }),
-  marble: new THREE.MeshStandardMaterial({ map: TEX.marble([2, 2]), roughness: 0.38, metalness: 0.05, envMapIntensity: 0.7 }),
-  gold: new THREE.MeshStandardMaterial({ map: TEX.gold(), roughness: 0.3, metalness: 0.9, envMapIntensity: 1.4 }),
-  wood: new THREE.MeshStandardMaterial({ map: TEX.wood([2, 2]), roughness: 0.65 }),
-  ceiling: new THREE.MeshStandardMaterial({ map: TEX.ceiling([16, 11]), roughness: 0.9 }),
-  glow: new THREE.MeshStandardMaterial({ color: 0xffe0b0, emissive: 0xffc070, emissiveIntensity: 2.6 }),
-  window: new THREE.MeshStandardMaterial({ color: 0xbfd6ff, emissive: 0x9fc0ff, emissiveIntensity: 1.9 }),
-  dark: new THREE.MeshStandardMaterial({ color: 0x14121a, roughness: 0.8 }),
-  steel: new THREE.MeshStandardMaterial({ color: 0xe3e9f5, metalness: 0.95, roughness: 0.12, envMapIntensity: 1.6 }),
-};
-function box(w, h, d, x, y, z, mat, { solid = true, shadow = true, receive = true } = {}) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); m.castShadow = shadow; m.receiveShadow = receive; level.add(m); if (solid || w * h * d > 2) levelMeshes.push(m);
-  if (solid) colliders.push({ min: V3(x - w / 2, y - h / 2, z - d / 2), max: V3(x + w / 2, y + h / 2, z + d / 2) });
+// Lambert instead of Standard: the PBR shader (GGX + image-based lighting) was half of the pixel cost on integrated GPUs
+function surf({ roughness = 0.8, metalness = 0, envMapIntensity = 1, ...o } = {}) {
+  const m = new THREE.MeshLambertMaterial(o);
+  const shine = metalness * 0.55 + Math.max(0, 0.5 - roughness) * 0.5;   // metals reflect a lot, polished marble a little, the rest nothing
+  if (shine > 0.02) { m.envMap = envCube; m.combine = THREE.MixOperation; m.reflectivity = Math.min(0.75, shine * envMapIntensity); }
   return m;
 }
+const MAT = {
+  stone: surf({ map: TEX.stone([8, 4]), roughness: 0.95 }),
+  stoneWide: surf({ map: TEX.stone([16, 4]), roughness: 0.95 }),
+  floor: surf({ map: TEX.marbleTile([15, 10]), roughness: 0.22, metalness: 0.08, envMapIntensity: 1.2 }),
+  carpet: surf({ map: TEX.carpet([12, 1]), roughness: 1.0 }),
+  marble: surf({ map: TEX.marble([2, 2]), roughness: 0.38, metalness: 0.05, envMapIntensity: 0.7 }),
+  gold: surf({ map: TEX.gold(), roughness: 0.3, metalness: 0.9, envMapIntensity: 1.4 }),
+  wood: surf({ map: TEX.wood([2, 2]), roughness: 0.65 }),
+  ceiling: surf({ map: TEX.ceiling([16, 11]), roughness: 0.9 }),
+  glow: surf({ color: 0xffe0b0, emissive: 0xffc070, emissiveIntensity: 2.6 }),
+  window: surf({ color: 0xbfd6ff, emissive: 0x9fc0ff, emissiveIntensity: 1.9 }),
+  dark: surf({ color: 0x14121a, roughness: 0.8 }),
+  steel: surf({ color: 0xe3e9f5, metalness: 0.95, roughness: 0.12, envMapIntensity: 1.6 }),
+};
+// Static pieces are collected and merged into one mesh per material at the end
+// of level construction: a few draw calls instead of a few hundred.
+const pieces = [];
+function piece(geo, x, y, z, mat, shadow) { geo.translate(x, y, z); pieces.push({ geo, mat, shadow }); }
+function box(w, h, d, x, y, z, mat, { solid = true, shadow = true } = {}) {
+  piece(new THREE.BoxGeometry(w, h, d), x, y, z, mat, shadow);
+  if (solid) colliders.push({ min: V3(x - w / 2, y - h / 2, z - d / 2), max: V3(x + w / 2, y + h / 2, z + d / 2) });
+}
 function cyl(r, h, x, y, z, mat, seg = 20, solid = true) {
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, seg), mat); m.position.set(x, y, z); m.castShadow = m.receiveShadow = solid; level.add(m); if (solid) levelMeshes.push(m);
-  if (solid) colliders.push({ min: V3(x - r, y - h / 2, z - r), max: V3(x + r, y + h / 2, z + r) }); return m;
+  piece(new THREE.CylinderGeometry(r, r, h, seg), x, y, z, mat, solid);
+  if (solid) colliders.push({ min: V3(x - r, y - h / 2, z - r), max: V3(x + r, y + h / 2, z + r) });
+}
+function bakeLevel() {
+  const byMat = new Map();
+  for (const p of pieces) { const k = p.mat.uuid + (p.shadow ? ':s' : ':n'); if (!byMat.has(k)) byMat.set(k, { mat: p.mat, shadow: p.shadow, geos: [] }); byMat.get(k).geos.push(p.geo); }
+  let n = 0;
+  for (const { mat, shadow, geos } of byMat.values()) {
+    const merged = mergeGeometries(geos, false); if (!merged) continue; for (const g of geos) g.dispose();
+    const m = new THREE.Mesh(merged, mat); m.castShadow = shadow; m.receiveShadow = true; level.add(m); levelMeshes.push(m); n++;
+  }
+  pieces.length = 0; return n;
+}
+// ray against the collision boxes (bullets, line of sight, camera): far cheaper than mesh raycasts
+const _hitN = V3();
+function rayBoxes(ox, oy, oz, dx, dy, dz, maxDist) {
+  let best = maxDist, nx = 0, ny = 0, nz = 0;
+  const ix = 1 / dx, iy = 1 / dy, iz = 1 / dz;
+  for (const c of colliders) {
+    let t1 = (c.min.x - ox) * ix, t2 = (c.max.x - ox) * ix; let tmin = Math.min(t1, t2), tmax = Math.max(t1, t2); let ax = 0;
+    t1 = (c.min.y - oy) * iy; t2 = (c.max.y - oy) * iy; const ymin = Math.min(t1, t2), ymax = Math.max(t1, t2); if (ymin > tmin) { tmin = ymin; ax = 1; } if (ymax < tmax) tmax = ymax;
+    t1 = (c.min.z - oz) * iz; t2 = (c.max.z - oz) * iz; const zmin = Math.min(t1, t2), zmax = Math.max(t1, t2); if (zmin > tmin) { tmin = zmin; ax = 2; } if (zmax < tmax) tmax = zmax;
+    if (tmax < Math.max(tmin, 0) || tmin >= best || tmin < 0) continue;
+    best = tmin; nx = ny = nz = 0; if (ax === 0) nx = dx > 0 ? -1 : 1; else if (ax === 1) ny = dy > 0 ? -1 : 1; else nz = dz > 0 ? -1 : 1;
+  }
+  if (best >= maxDist) return null; _hitN.set(nx, ny, nz); return { dist: best, normal: _hitN };
 }
 box(2 * HW + 2, 1, 2 * HD + 2, 0, -0.5, 0, MAT.floor);
 box(2 * HW - 4, 0.05, 7, 0, 0.026, 0, MAT.carpet, { solid: false, shadow: false });
@@ -182,7 +225,7 @@ for (const sz of [-1, 1]) for (let i = 0; i < 5; i++) {
   const shaft = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 16), new THREE.MeshBasicMaterial({ map: shaftTex, transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }));
   shaft.position.set(x, 6.5, sz * (HD - 5)); shaft.rotation.x = sz * 0.55; level.add(shaft);
   if (i % 2) {
-    box(3.2, 2.4, 0.12, x + 6, 3.4, sz * (HD - 0.26), new THREE.MeshStandardMaterial({ map: TEX.painting(i + (sz > 0 ? 3 : 0)), roughness: 0.7 }), { solid: false, shadow: false });
+    box(3.2, 2.4, 0.12, x + 6, 3.4, sz * (HD - 0.26), surf({ map: TEX.painting(i + (sz > 0 ? 3 : 0)), roughness: 0.7 }), { solid: false, shadow: false });
     box(3.6, 2.8, 0.1, x + 6, 3.4, sz * (HD - 0.3), MAT.gold, { solid: false, shadow: false });
     if (sz > 0) { const sc = new THREE.PointLight(0xffb070, 30, 14, 2); sc.position.set(x + 6, 5.4, sz * (HD - 1.2)); level.add(sc); }
     box(0.4, 0.5, 0.3, x + 6, 5.2, sz * (HD - 0.3), MAT.gold, { solid: false, shadow: false });
@@ -226,6 +269,7 @@ for (let i = 0; i < dustN; i++) { dustPos[i * 3] = rand(-HW, HW); dustPos[i * 3 
 dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
 const softTex = TEX.soft();
 scene.add(new THREE.Points(dustGeo, new THREE.PointsMaterial({ size: 0.09, map: softTex, transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending, color: 0xffe6c0 })));
+console.log('[arena] level baked into', bakeLevel(), 'meshes,', colliders.length, 'colliders');
 const SPAWNS = [[-26, 0, -16], [26, 0, 16], [-26, 0, 16], [26, 0, -16], [0, 1.2, 0], [-14, BY, -17], [14, BY, 17], [-25, BY, 0], [25, BY, 0], [12, 0, -12], [-12, 0, 12]];
 
 // ------------------------------------------------------------------ characters (KayKit Adventurers, CC0)
@@ -263,11 +307,11 @@ function gunModel(trim) {
 }
 function humanoid(col, accent) {
   const g = new THREE.Group();
-  const skin = new THREE.MeshStandardMaterial({ color: 0xe9c49f, roughness: 0.75 });
-  const cloth = new THREE.MeshStandardMaterial({ color: col, roughness: 0.55, metalness: 0.1 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x1a1720, roughness: 0.7 });
-  const hairM = new THREE.MeshStandardMaterial({ color: 0x1d1418, roughness: 0.6 });
-  const trim = new THREE.MeshStandardMaterial({ color: accent, emissive: accent, emissiveIntensity: 0.45, roughness: 0.4, metalness: 0.3 });
+  const skin = surf({ color: 0xe9c49f, roughness: 0.75 });
+  const cloth = surf({ color: col, roughness: 0.55, metalness: 0.1 });
+  const dark = surf({ color: 0x1a1720, roughness: 0.7 });
+  const hairM = surf({ color: 0x1d1418, roughness: 0.6 });
+  const trim = surf({ color: accent, emissive: accent, emissiveIntensity: 0.45, roughness: 0.4, metalness: 0.3 });
   const parts = [];
   const mk = (geo, m, x, y, z, parent = g, outline = true) => { const mesh = new THREE.Mesh(geo, m); mesh.position.set(x, y, z); mesh.castShadow = true; parent.add(mesh); parts.push(mesh); if (outline) { const o = new THREE.Mesh(geo, OUTLINE); o.scale.setScalar(1.07); mesh.add(o); } return mesh; };
   const B = (w, h, d) => new THREE.BoxGeometry(w, h, d);
@@ -344,7 +388,7 @@ class Fighter {
     const bones = {}, mats = [];
     model.traverse((o) => {
       bones[o.name] = o;
-      if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; o.material = o.material.clone(); if (!this.isPlayer) o.material.color.lerp(new THREE.Color(this.color), 0.28); mats.push(o.material); }
+      if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.geometry.computeBoundingSphere(); o.geometry.boundingSphere.radius = Math.max(o.geometry.boundingSphere.radius, 3.2); o.material = new THREE.MeshLambertMaterial({ map: o.material.map, color: o.material.color.clone() }); if (!this.isPlayer) o.material.color.lerp(new THREE.Color(this.color), 0.28); mats.push(o.material); }
     });
     for (const n of HIDE_PARTS) if (bones[n]) bones[n].visible = false;
     const sword = bones['1H_Sword'] || null;
@@ -365,7 +409,7 @@ class Fighter {
         bladeQ.setFromUnitVectors(V3(0, 0, 1), dir.multiplyScalar(flip));
       }
     }
-    const trim = new THREE.MeshStandardMaterial({ color: this.accent, emissive: this.accent, emissiveIntensity: 0.5, roughness: 0.4 });
+    const trim = surf({ color: this.accent, emissive: this.accent, emissiveIntensity: 0.5, roughness: 0.4 });
     const gun = gunModel(trim); if (sword) { gun.position.copy(sword.position); gun.quaternion.copy(sword.quaternion).multiply(bladeQ); gun.scale.setScalar(1 / src.scale * 0.9); } hand.add(gun);
     const mixer = new THREE.AnimationMixer(model); const actions = {};
     for (const c of src.clips) actions[c.name] = mixer.clipAction(c);
@@ -450,19 +494,25 @@ class Fighter {
   }
   moveAxis(axis, d) {
     if (Math.abs(d) < 1e-6) return;
-    const key = axis === 0 ? 'x' : axis === 1 ? 'y' : 'z'; this.pos[key] += d; const bb = this.aabb();
+    const p = this.pos; if (axis === 0) p.x += d; else if (axis === 1) p.y += d; else p.z += d;
+    const hx = HALF.x, hz = HALF.z, hh = HALF.y * 2;
     for (const c of colliders) {
-      if (bb.max.x <= c.min.x || bb.min.x >= c.max.x || bb.max.y <= c.min.y || bb.min.y >= c.max.y || bb.max.z <= c.min.z || bb.min.z >= c.max.z) continue;
-      if (axis === 1) { if (d < 0) { this.pos.y = c.max.y; this.vel.y = 0; this.grounded = true; } else { this.pos.y = c.min.y - HALF.y * 2; this.vel.y = 0; } }
+      if (p.x + hx <= c.min.x || p.x - hx >= c.max.x || p.y + hh <= c.min.y || p.y >= c.max.y || p.z + hz <= c.min.z || p.z - hz >= c.max.z) continue;
+      if (axis === 1) { if (d < 0) { p.y = c.max.y; this.vel.y = 0; this.grounded = true; } else { p.y = c.min.y - hh; this.vel.y = 0; } }
       else {
-        const lift = c.max.y - this.pos.y;
-        if (lift > 0 && lift <= STEP_UP) { const test = this.aabb(_v2.copy(this.pos).setY(c.max.y + 0.01)); let free = true; for (const o of colliders) { if (test.max.x <= o.min.x || test.min.x >= o.max.x || test.max.y <= o.min.y || test.min.y >= o.max.y || test.max.z <= o.min.z || test.min.z >= o.max.z) continue; free = false; break; } if (free) { this.pos.y = c.max.y + 0.01; continue; } }
-        if (axis === 0) { this.pos.x = d > 0 ? c.min.x - HALF.x - 0.001 : c.max.x + HALF.x + 0.001; this.wall = V3(d > 0 ? -1 : 1, 0, 0); this.vel.x = 0; }
-        else { this.pos.z = d > 0 ? c.min.z - HALF.z - 0.001 : c.max.z + HALF.z + 0.001; this.wall = V3(0, 0, d > 0 ? -1 : 1); this.vel.z = 0; }
+        const lift = c.max.y - p.y;
+        if (lift > 0 && lift <= STEP_UP) {
+          const ty = c.max.y + 0.01; let free = true;
+          for (const o of colliders) { if (p.x + hx <= o.min.x || p.x - hx >= o.max.x || ty + hh <= o.min.y || ty >= o.max.y || p.z + hz <= o.min.z || p.z - hz >= o.max.z) continue; free = false; break; }
+          if (free) { p.y = ty; continue; }
+        }
+        if (!this.wall) this.wall = V3();
+        if (axis === 0) { p.x = d > 0 ? c.min.x - hx - 0.001 : c.max.x + hx + 0.001; this.wall.set(d > 0 ? -1 : 1, 0, 0); this.vel.x = 0; }
+        else { p.z = d > 0 ? c.min.z - hz - 0.001 : c.max.z + hz + 0.001; this.wall.set(0, 0, d > 0 ? -1 : 1); this.vel.z = 0; }
       }
       break;
     }
-    this.pos.x = clamp(this.pos.x, -HW + HALF.x, HW - HALF.x); this.pos.z = clamp(this.pos.z, -HD + HALF.z, HD - HALF.z);
+    p.x = clamp(p.x, -HW + hx, HW - hx); p.z = clamp(p.z, -HD + hz, HD - hz);
   }
   poseRig(dt, moving, mx, mz) {
     const r = this.rig, sp = Math.hypot(this.vel.x, this.vel.z), run = moving && this.grounded;
@@ -517,13 +567,13 @@ class Fighter {
   shoot(aimDir) {
     const from = this.eye(); const dir = aimDir ? aimDir.clone() : this.aim();
     if (!this.isPlayer) { dir.x += rand(-0.08, 0.08); dir.y += rand(-0.06, 0.06); dir.z += rand(-0.08, 0.08); dir.normalize(); }
-    ray.set(from, dir); ray.far = 90;
-    const hits = ray.intersectObjects(levelMeshes, false); let end = from.clone().addScaledVector(dir, hits.length ? hits[0].distance : 90);
-    let victim = null, best = hits.length ? hits[0].distance : 90;
+    const wallHit = rayBoxes(from.x, from.y, from.z, dir.x, dir.y, dir.z, 90); const wallDist = wallHit ? wallHit.dist : 90; const wallN = wallHit ? wallHit.normal.clone() : null;
+    let end = from.clone().addScaledVector(dir, wallDist);
+    let victim = null, best = wallDist;
     for (const f of fighters) { if (f === this || f.dead) continue; const c = f.pos.clone().setY(f.pos.y + 1.0); const t = c.clone().sub(from).dot(dir); if (t < 0 || t > best) continue; const perp = c.sub(from.clone().addScaledVector(dir, t)).length(); if (perp < 0.75) { victim = f; best = t; } }
     if (victim) end = from.clone().addScaledVector(dir, best);
     const mz = this.muzzleWorld(); tracer(mz, end); flashLight(mz); if (this.isPlayer || this.near()) SFX.shot();
-    if (victim) { victim.damage(19, this); sparks(end, 8, 5); } else { sparks(end, 4, 3, 0xc9c9c9); if (hits.length && hits[0].face) decal(end, hits[0].face.normal.clone().transformDirection(hits[0].object.matrixWorld)); }
+    if (victim) { victim.damage(19, this); sparks(end, 8, 5); } else { sparks(end, 4, 3, 0xc9c9c9); if (wallN) decal(end, wallN); }
     if (this.isPlayer) { this.pitch += 0.012; recoil = 0.7; }
   }
   slashDamage() {
@@ -555,7 +605,7 @@ function botThink(f, dt) {
   if (!b.target || b.target.dead || b.losT <= 0) {
     let best = null, bd = 1e9; for (const o of fighters) { if (o === f || o.dead || (o.isPlayer && (!controlTaken || o.guard > 0))) continue; let d = o.pos.distanceToSquared(f.pos); if (o.isPlayer) { if (d > 14 * 14) continue; d += 36; } if (d < bd) { bd = d; best = o; } }
     b.target = best; b.losT = 0.3;
-    if (best) { const from = f.eye(), dir = best.pos.clone().setY(best.pos.y + 1).sub(from); const dist = dir.length(); dir.normalize(); ray.set(from, dir); ray.far = dist; b.los = ray.intersectObjects(levelMeshes, false).length === 0; }
+    if (best) { const from = f.eye(), dir = best.pos.clone().setY(best.pos.y + 1).sub(from); const dist = dir.length(); dir.normalize(); b.los = rayBoxes(from.x, from.y, from.z, dir.x, dir.y, dir.z, dist) === null; }
   }
   const t = b.target; let goal;
   if (t) {
@@ -637,8 +687,8 @@ function updateCamera(dt) {
   const back = V3(Math.sin(camYaw) * Math.cos(cp), -Math.sin(cp), Math.cos(camYaw) * Math.cos(cp));
   const side = V3(Math.cos(camYaw), 0, -Math.sin(camYaw));
   const want = head.clone().addScaledVector(back, DEMO ? 5.6 : 4.4).addScaledVector(side, 0.5).add(V3(0, DEMO ? 1.0 : 0.7, 0));
-  ray.set(head, want.clone().sub(head).normalize()); ray.far = head.distanceTo(want);
-  const hit = ray.intersectObjects(levelMeshes, false)[0]; if (hit) want.copy(head).addScaledVector(ray.ray.direction, Math.max(0.6, hit.distance - 0.25));
+  const cd = want.clone().sub(head); const cl = cd.length(); cd.divideScalar(cl);
+  const hit = rayBoxes(head.x, head.y, head.z, cd.x, cd.y, cd.z, cl); if (hit) want.copy(head).addScaledVector(cd, Math.max(0.6, hit.dist - 0.25));
   camPos.lerp(want, 1 - Math.pow(0.0005, dt)); camera.position.copy(camPos);
   const aimV = DEMO ? V3(-Math.sin(camYaw) * Math.cos(cp), Math.sin(cp), -Math.cos(camYaw) * Math.cos(cp)) : player.aim();
   camera.lookAt(head.clone().addScaledVector(side, 0.5).addScaledVector(aimV, 7));
@@ -660,7 +710,7 @@ function updateHUD(dt) {
   $('w-sword').classList.toggle('on', player.weapon === 'sword'); $('w-gun').classList.toggle('on', player.weapon === 'gun');
   gameT += dt; const m = Math.floor(gameT / 60), s = Math.floor(gameT % 60); $('clock').textContent = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`; $('kd').textContent = `${player.kills} / ${player.deaths}`;
   actionsT += dt; if (actionsT >= 1) { $('apm').textContent = Math.round(actions * 60 / actionsT); actions = 0; actionsT = 0; }
-  fpsAcc += dt; fpsN++; if (fpsAcc >= 0.5) { $('fps').textContent = Math.round(fpsN / fpsAcc); fpsAcc = 0; fpsN = 0; }
+  fpsAcc += dt; if (fpsAcc >= 0.5) { $('fps').textContent = Math.round(1000 / Math.max(1, stats.updateMs + stats.renderMs)) + (renderScale < 1 ? '·' + Math.round(renderScale * 100) + '%' : ''); fpsAcc = 0; }
   if (player.dead) $('dead-t').textContent = Math.ceil(Math.max(0, player.respawnT)); else if ($('dead').style.display === 'grid') $('dead').style.display = 'none';
   const dir = V3(); camera.getWorldDirection(dir); let hot = false;
   for (const f of fighters) { if (f === player || f.dead) continue; const c = f.pos.clone().setY(f.pos.y + 1).sub(camera.position); const t = c.dot(dir); if (t > 0 && t < 60 && c.sub(dir.clone().multiplyScalar(t)).length() < 0.9) { hot = true; break; } }
@@ -669,15 +719,36 @@ function updateHUD(dt) {
 }
 
 // ------------------------------------------------------------------ post
-const composer = new EffectComposer(renderer);
+const msaaTarget = new THREE.WebGLRenderTarget(innerWidth * BASE_PR, innerHeight * BASE_PR, { type: THREE.HalfFloatType, samples: POST ? MSAA : 0 });
+const composer = new EffectComposer(renderer, msaaTarget);
 composer.addPass(new RenderPass(scene, camera));
 if (POST) {
-  composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.42, 0.55, 0.92));
+  composer.addPass(new UnrealBloomPass(new THREE.Vector2(Math.round(innerWidth / 4), Math.round(innerHeight / 4)), 0.42, 0.55, 0.92));   // quarter-res mips: bloom is a blur anyway
   const vig = new ShaderPass(VignetteShader); vig.uniforms.offset.value = 0.95; vig.uniforms.darkness.value = 1.15; composer.addPass(vig);
-  composer.addPass(new SMAAPass(innerWidth * renderer.getPixelRatio(), innerHeight * renderer.getPixelRatio()));
 }
 composer.addPass(new OutputPass());
-addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight); });
+const fxaa = POST && MSAA === 0 ? new ShaderPass(FXAAShader) : null; if (fxaa) composer.addPass(fxaa);
+// adaptive render scale: when frames run long the 3D view drops resolution (the HUD stays crisp), and climbs back when there is headroom
+let renderScale = 1, frameEma = 16, scaleT = 0, warmup = 3000;
+function applyScale() {
+  renderer.setPixelRatio(BASE_PR * renderScale); composer.setPixelRatio(BASE_PR * renderScale); composer.setSize(innerWidth, innerHeight);
+  if (fxaa) fxaa.material.uniforms.resolution.value.set(1 / (innerWidth * BASE_PR * renderScale), 1 / (innerHeight * BASE_PR * renderScale));
+}
+applyScale();
+function adapt(dtMs, cpuMs) {
+  if (RECORD_FPS || !ADAPT) return; if (warmup > 0) { warmup -= dtMs; return; }   // ignore the loading hitches
+  frameEma = frameEma * 0.9 + dtMs * 0.1; scaleT += dtMs;
+  if (scaleT < 600) return; scaleT = 0;
+  // with GPU timing available, aim for ~13 ms of GPU work per frame (headroom under 60 Hz); otherwise fall back to frame pacing
+  const cost = TQ ? Math.max(stats.gpuMs, cpuMs) : frameEma, target = TQ ? 13 : 17.5;
+  let next = renderScale;
+  if (cost > target * 1.15) next = renderScale * Math.sqrt(target / cost);   // pixel cost scales with area
+  else if (cost < target * 0.7) next = renderScale + 0.05;
+  next = Math.min(1, Math.max(0.5, next));
+  if (Math.abs(next - renderScale) > 0.02) { renderScale = next; applyScale(); }
+}
+
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); applyScale(); });
 
 // ------------------------------------------------------------------ loop
 function update(dt) {
@@ -691,8 +762,28 @@ function update(dt) {
   const dp = dustGeo.attributes.position.array; for (let i = 0; i < dustN; i++) { dp[i * 3 + 1] += Math.sin(perfTime * 0.5 + dustSeed[i]) * 0.002; dp[i * 3] += Math.cos(perfTime * 0.3 + dustSeed[i]) * 0.002; } dustGeo.attributes.position.needsUpdate = true;
   updateFX(dt); updateCamera(dt); updateHUD(dt);
 }
-const clock = new THREE.Clock(); let acc = 0; const FIXED = 1 / 60;
-function frame() { const dt = Math.min(0.05, clock.getDelta()); acc += dt; while (acc >= FIXED) { update(FIXED); acc -= FIXED; } composer.render(); requestAnimationFrame(frame); }
+const clock = new THREE.Clock(); let acc = 0, frameNo = 0; const FIXED = 1 / 60;
+const stats = { fps: 0, updateMs: 0, renderMs: 0, gpuMs: 0, calls: 0, tris: 0, scale: 1 };
+// GPU time per frame via EXT_disjoint_timer_query_webgl2 (ANGLE/D3D11 and desktop GL expose it); NaN-safe when missing
+const GL = renderer.getContext(); const TQ = GL.getExtension('EXT_disjoint_timer_query_webgl2'); const tqPool = [];
+function gpuBegin() { if (!TQ || tqPool.length > 8) return false; const q = GL.createQuery(); GL.beginQuery(TQ.TIME_ELAPSED_EXT, q); tqPool.push(q); return true; }
+function gpuEnd(open) {
+  if (open) GL.endQuery(TQ.TIME_ELAPSED_EXT);
+  while (tqPool.length) { const q = tqPool[0]; if (!GL.getQueryParameter(q, GL.QUERY_RESULT_AVAILABLE)) break; if (!GL.getParameter(TQ.GPU_DISJOINT_EXT)) stats.gpuMs = stats.gpuMs * 0.9 + GL.getQueryParameter(q, GL.QUERY_RESULT) / 1e6 * 0.1; GL.deleteQuery(q); tqPool.shift(); }
+}
+renderer.info.autoReset = false;
+function frame() {
+  renderer.info.reset();
+  const t0 = performance.now(); const dt = Math.min(0.05, clock.getDelta()); acc += dt;
+  while (acc >= FIXED) { update(FIXED); acc -= FIXED; }
+  const t1 = performance.now();
+  if ((frameNo++ & 1) === 0) renderer.shadowMap.needsUpdate = true;
+  const tq = gpuBegin(); composer.render(); gpuEnd(tq);
+  const t2 = performance.now();
+  stats.updateMs = stats.updateMs * 0.9 + (t1 - t0) * 0.1; stats.renderMs = stats.renderMs * 0.9 + (t2 - t1) * 0.1; stats.calls = renderer.info.render.calls; stats.tris = renderer.info.render.triangles; stats.fps = 1 / Math.max(dt, 1e-3); stats.scale = renderScale;
+  adapt(dt * 1000, t2 - t0);
+  requestAnimationFrame(frame);
+}
 
 async function boot() {
   await loadCharacters();
@@ -703,11 +794,11 @@ async function boot() {
   for (let i = 0; i < BOT_COUNT; i++) fighters.push(new Fighter({ name: `${NAMES[i % NAMES.length]} ${i + 1}`, color: TEAM_COLS[i % TEAM_COLS.length], accent: 0xffffff, kind: botKinds.length ? botKinds[i % botKinds.length] : null }));
   $('loading').style.display = 'none';
   $('grab').style.display = DEMO || RECORD_FPS ? 'none' : 'block';
-  window.__arena = { get player() { return player; }, fighters, get locked() { return locked; }, get freeLook() { return freeLook; } };   // read-only debug handle
+  window.__arena = { get player() { return player; }, fighters, get locked() { return locked; }, get freeLook() { return freeLook; }, stats };   // read-only debug handle
   camPos.set(player.pos.x, player.pos.y + 3, player.pos.z + 6);
   if (RECORD_FPS) {
-    window.__step = () => { const n = Math.round(60 / RECORD_FPS); for (let i = 0; i < n; i++) update(FIXED); composer.render(); return true; };
-    for (let i = 0; i < 90; i++) update(FIXED); composer.render(); window.__ready = true;
+    window.__step = () => { const n = Math.round(60 / RECORD_FPS); for (let i = 0; i < n; i++) update(FIXED); renderer.shadowMap.needsUpdate = true; composer.render(); return true; };
+    for (let i = 0; i < 90; i++) update(FIXED); renderer.shadowMap.needsUpdate = true; composer.render(); window.__ready = true;
   } else frame();
 }
 boot().catch((e) => { console.error(e); $('grab').style.display = 'block'; $('grab').querySelector('.pill').textContent = 'could not start: ' + e.message; });
