@@ -588,15 +588,24 @@ const keyEl = {}; document.querySelectorAll('#keys .k').forEach((el) => { keyEl[
 function setKey(code, on) { keys[code] = on; const el = keyEl[code]; if (el) el.classList.toggle('on', on); if (on) actions++; }
 addEventListener('keydown', (e) => { if (e.repeat) return; setKey(e.code, true); if (e.code === 'Space') edge.jump = true; if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') edge.dash = true; if (e.code === 'KeyQ') edge.swap = true; if (e.code === 'KeyR') edge.reload = true; if (e.code === 'Tab') $('board').style.display = 'grid'; if (e.code === 'Space' || e.code === 'Tab') e.preventDefault(); });
 addEventListener('keyup', (e) => { setKey(e.code, false); if (e.code === 'Tab') $('board').style.display = 'none'; });
-addEventListener('mousemove', (e) => { if (!locked) return; mouseDX += e.movementX; mouseDY += e.movementY; });
-addEventListener('mousedown', (e) => { if (!locked) return; if (e.button === 0) { mouseL = true; edge.attack = true; setKey('MouseL', true); } if (e.button === 2) { edge.alt = true; setKey('MouseR', true); } });
+// pointer lock is the normal path; where it is refused (embedded views, some browsers) the first click switches to free-look:
+// raw mouse movement still steers, clicks still attack, and the cursor is hidden over the canvas
+let freeLook = false;
+const inControl = () => locked || freeLook;
+addEventListener('mousemove', (e) => { if (!inControl()) return; mouseDX += e.movementX; mouseDY += e.movementY; });
+addEventListener('mousedown', (e) => { if (!inControl()) return; if (e.button === 0) { mouseL = true; edge.attack = true; setKey('MouseL', true); } if (e.button === 2) { edge.alt = true; setKey('MouseR', true); } });
 addEventListener('mouseup', (e) => { if (e.button === 0) { mouseL = false; setKey('MouseL', false); } if (e.button === 2) setKey('MouseR', false); });
 addEventListener('contextmenu', (e) => e.preventDefault());
-addEventListener('wheel', () => { if (locked) edge.swap = true; }, { passive: true });
+addEventListener('wheel', () => { if (inControl()) edge.swap = true; }, { passive: true });
 let player = null, controlTaken = DEMO || !!RECORD_FPS;   // until the mouse is grabbed the player is a spectator: untargetable and unhurt
-function grabMouse() { try { const p = renderer.domElement.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch { /* pointer lock unavailable here */ } }
-document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === renderer.domElement; if (locked) controlTaken = true; $('grab').style.display = locked || DEMO ? 'none' : 'block'; });
-renderer.domElement.addEventListener('click', () => { if (!locked && !DEMO && player && !player.dead) { SFX.init(); grabMouse(); } });
+function enableFreeLook() { if (locked || freeLook) return; freeLook = true; controlTaken = true; renderer.domElement.style.cursor = 'none'; $('grab').style.display = 'none'; }
+function grabMouse() {
+  let settled = false;
+  try { const p = renderer.domElement.requestPointerLock(); if (p && p.catch) p.catch(() => { settled = true; enableFreeLook(); }); } catch { settled = true; enableFreeLook(); }
+  setTimeout(() => { if (!settled && !locked) enableFreeLook(); }, 400);
+}
+document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === renderer.domElement; if (locked) { controlTaken = true; freeLook = false; renderer.domElement.style.cursor = ''; } $('grab').style.display = locked || freeLook || DEMO ? 'none' : 'block'; });
+renderer.domElement.addEventListener('click', () => { if (!inControl() && !DEMO && player && !player.dead) { SFX.init(); grabMouse(); } });
 
 function playerInput() {
   const inp = { move: { x: 0, z: 0 }, jump: edge.jump, dash: edge.dash, attack: edge.attack || (mouseL && player.weapon === 'gun'), alt: edge.alt, reload: edge.reload, swap: edge.swap, aimDir: null };
