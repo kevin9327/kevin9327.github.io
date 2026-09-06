@@ -599,9 +599,11 @@ addEventListener('contextmenu', (e) => e.preventDefault());
 addEventListener('wheel', () => { if (inControl()) edge.swap = true; }, { passive: true });
 let player = null, controlTaken = DEMO || !!RECORD_FPS;   // until the mouse is grabbed the player is a spectator: untargetable and unhurt
 function enableFreeLook() { if (locked || freeLook) return; freeLook = true; controlTaken = true; renderer.domElement.style.cursor = 'none'; $('grab').style.display = 'none'; }
+let lockTried = false;
 function grabMouse() {
-  let settled = false;
-  try { const p = renderer.domElement.requestPointerLock(); if (p && p.catch) p.catch(() => { settled = true; enableFreeLook(); }); } catch { settled = true; enableFreeLook(); }
+  if (lockTried) { enableFreeLook(); return; }
+  lockTried = true; let settled = false;
+  try { Promise.resolve(renderer.domElement.requestPointerLock()).catch(() => { settled = true; enableFreeLook(); }); } catch { settled = true; enableFreeLook(); }
   setTimeout(() => { if (!settled && !locked) enableFreeLook(); }, 400);
 }
 document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === renderer.domElement; if (locked) { controlTaken = true; freeLook = false; renderer.domElement.style.cursor = ''; } $('grab').style.display = locked || freeLook || DEMO ? 'none' : 'block'; });
