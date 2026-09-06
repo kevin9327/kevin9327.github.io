@@ -318,7 +318,7 @@ function updateFX(dt) {
 // ------------------------------------------------------------------ fighters
 const HALF = V3(0.4, 0.9, 0.4);
 const GRAV = -26, SPEED = 8.2, JUMP = 9.6, DASH = 19, STEP_UP = 0.55;
-const PLAYER_HP = 150, SPAWN_GUARD = 2.0, REGEN_DELAY = 4.0, REGEN_RATE = 12;
+const PLAYER_HP = 150, SPAWN_GUARD = 3.0, REGEN_DELAY = 4.0, REGEN_RATE = 12;
 const fighters = [];
 const ray = new THREE.Raycaster();
 const _v2 = V3(), _v3 = V3();
@@ -592,9 +592,10 @@ addEventListener('keyup', (e) => { setKey(e.code, false); if (e.code === 'Tab') 
 // raw mouse movement still steers, clicks still attack, and the cursor is hidden over the canvas
 let freeLook = false;
 const inControl = () => locked || freeLook;
-addEventListener('mousemove', (e) => { if (!inControl()) return; mouseDX += e.movementX; mouseDY += e.movementY; });
-addEventListener('mousedown', (e) => { if (!inControl()) return; if (e.button === 0) { mouseL = true; edge.attack = true; setKey('MouseL', true); } if (e.button === 2) { edge.alt = true; setKey('MouseR', true); } });
-addEventListener('mouseup', (e) => { if (e.button === 0) { mouseL = false; setKey('MouseL', false); } if (e.button === 2) setKey('MouseR', false); });
+let curX = innerWidth / 2, curY = innerHeight / 2;
+addEventListener('mousemove', (e) => { curX = e.clientX; curY = e.clientY; if (!locked) return; mouseDX += e.movementX; mouseDY += e.movementY; });
+addEventListener('pointerdown', (e) => { if (!inControl()) return; if (e.button === 0) { mouseL = true; edge.attack = true; setKey('MouseL', true); } if (e.button === 2) { edge.alt = true; setKey('MouseR', true); } });
+addEventListener('pointerup', (e) => { if (e.button === 0) { mouseL = false; setKey('MouseL', false); } if (e.button === 2) setKey('MouseR', false); });
 addEventListener('contextmenu', (e) => e.preventDefault());
 addEventListener('wheel', () => { if (inControl()) edge.swap = true; }, { passive: true });
 let player = null, controlTaken = DEMO || !!RECORD_FPS;   // until the mouse is grabbed the player is a spectator: untargetable and unhurt
@@ -612,7 +613,14 @@ renderer.domElement.addEventListener('click', () => { if (!inControl() && !DEMO 
 function playerInput() {
   const inp = { move: { x: 0, z: 0 }, jump: edge.jump, dash: edge.dash, attack: edge.attack || (mouseL && player.weapon === 'gun'), alt: edge.alt, reload: edge.reload, swap: edge.swap, aimDir: null };
   for (const k in edge) edge[k] = false;
-  player.yaw -= mouseDX * 0.0022; player.pitch = clamp(player.pitch - mouseDY * 0.0022, -1.2, 1.1); mouseDX = mouseDY = 0;
+  if (locked) { player.yaw -= mouseDX * 0.0022; player.pitch = clamp(player.pitch - mouseDY * 0.0022, -1.2, 1.1); }
+  else if (freeLook) {
+    // no pointer lock: the cursor's offset from the centre steers, so the view can spin all the way round
+    const dx = (curX - innerWidth / 2) / (innerWidth / 2), dy = (curY - innerHeight / 2) / (innerHeight / 2);
+    if (Math.abs(dx) > 0.06) player.yaw -= Math.sign(dx) * Math.pow(Math.abs(dx), 1.5) * 3.6 * FIXED;
+    player.pitch = lerp(player.pitch, clamp(-dy * 1.1, -1.2, 1.0), 12 * FIXED);
+  }
+  mouseDX = mouseDY = 0;
   const f = player.forward(), r = V3(-f.z, 0, f.x); let ax = 0, az = 0;
   if (keys.KeyW) { ax += f.x; az += f.z; } if (keys.KeyS) { ax -= f.x; az -= f.z; } if (keys.KeyD) { ax += r.x; az += r.z; } if (keys.KeyA) { ax -= r.x; az -= r.z; }
   const l = Math.hypot(ax, az); if (l > 0) { ax /= l; az /= l; } inp.move.x = ax; inp.move.z = az;
@@ -695,6 +703,7 @@ async function boot() {
   for (let i = 0; i < BOT_COUNT; i++) fighters.push(new Fighter({ name: `${NAMES[i % NAMES.length]} ${i + 1}`, color: TEAM_COLS[i % TEAM_COLS.length], accent: 0xffffff, kind: botKinds.length ? botKinds[i % botKinds.length] : null }));
   $('loading').style.display = 'none';
   $('grab').style.display = DEMO || RECORD_FPS ? 'none' : 'block';
+  window.__arena = { get player() { return player; }, fighters, get locked() { return locked; }, get freeLook() { return freeLook; } };   // read-only debug handle
   camPos.set(player.pos.x, player.pos.y + 3, player.pos.z + 6);
   if (RECORD_FPS) {
     window.__step = () => { const n = Math.round(60 / RECORD_FPS); for (let i = 0; i < n; i++) update(FIXED); composer.render(); return true; };
