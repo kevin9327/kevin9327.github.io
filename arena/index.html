@@ -35,6 +35,7 @@
   #board tr.me td { color:var(--orange); font-weight:700; }
   #board td i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:-1px; }
   #board p { margin:8px 0 0; color:var(--mute); font-size:11px; }
+  #board p a { color:#e6edf3; pointer-events:auto; margin-right:4px; }
   #topleft { left:22px; top:18px; width:280px; }
   .emblem { display:flex; align-items:center; gap:10px; }
   .emblem .z { width:44px; height:44px; border-radius:8px; background:linear-gradient(135deg, var(--pink), var(--orange) 60%, var(--yellow)); display:grid; place-items:center; font-weight:900; font-size:26px; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.5); }
@@ -80,7 +81,11 @@
   .card .opts a { color:#e6edf3; margin-right:10px; }
   .card .foot { margin-top:12px; font-size:11px; color:var(--mute); }
   .card .foot a { color:#e6edf3; }
+  #loading { position:fixed; left:0; top:0; right:0; height:4px; z-index:6; background:rgba(255,255,255,.08); }
+  #loading i { display:block; height:100%; width:0; background:linear-gradient(90deg, var(--pink), var(--orange), var(--yellow)); transition:width .2s; }
+  #grab { left:50%; bottom:8px; transform:translateX(-50%); font-size:11px; color:rgba(230,237,243,.75); text-shadow:0 1px 3px #000; white-space:nowrap; }
   #dead { display:none; }
+  #hint { display:none; }
   #dead .card { text-align:center; }
   #dead h1 { color:#ef4444; -webkit-text-fill-color:#ef4444; background:none; }
   @media (max-width:760px) { #keys, #hint { display:none; } }
@@ -106,7 +111,7 @@
 
 <div class="hud" id="weapon"><b id="ammo">12</b><span id="ammo-l">rounds · ∞</span><div><span class="w" id="w-sword">⚔ sword</span><span class="w on" id="w-gun">✦ gun</span></div></div>
 
-<div class="hud" id="board"><div class="card"><h2>Scoreboard</h2><table><thead><tr><th>#</th><th>fighter</th><th>K</th><th>D</th></tr></thead><tbody id="board-rows"></tbody></table><p>hold Tab</p></div></div>
+<div class="hud" id="board"><div class="card"><h2>Scoreboard</h2><table><thead><tr><th>#</th><th>fighter</th><th>K</th><th>D</th></tr></thead><tbody id="board-rows"></tbody></table><p>hold Tab · bots: <a href="?bots=4">4</a> <a href="?bots=8">8</a> <a href="?bots=12">12</a> <a href="?bots=20">20</a></p><p>Level, effects and sounds generated in code · fighters: <a href="https://kaylousberg.itch.io/kaykit-adventurers" target="_blank" rel="noopener">KayKit Adventurers</a> by Kay Lousberg (CC0) · <a href="https://github.com/kevin9327/kevin9327.github.io/tree/main/arena" target="_blank" rel="noopener">source</a></p></div></div>
 
 <div class="hud" id="keys">
   <div class="row"><span class="k" data-k="Escape">esc</span><span class="k" data-k="Digit1">1</span><span class="k" data-k="Digit2">2</span><span class="k" data-k="Digit3">3</span><span class="k" data-k="Digit4">4</span></div>
@@ -120,23 +125,9 @@
 
 <div class="hud" id="hint">Q swap weapon · right-click uses the other one · shift dash · space in the air = double jump · run at a wall and jump off it</div>
 
-<div class="overlay" id="start">
-  <div class="card">
-    <h1>Gunslash Arena</h1>
-    <p>A third-person wall-running sword-and-gun arena, built from scratch in three.js. No install, no assets, everything on screen is generated in code.</p>
-    <table>
-      <tr><td>W A S D</td><td>move</td></tr>
-      <tr><td>mouse</td><td>look · left click attacks with the weapon in hand · right click with the other one</td></tr>
-      <tr><td>space</td><td>jump · again in the air to double jump · against a wall to wall-run, then jump off</td></tr>
-      <tr><td>shift</td><td>dash</td></tr>
-      <tr><td>Q / wheel</td><td>swap sword and gun</td></tr>
-      <tr><td>R</td><td>reload</td></tr>
-    </table>
-    <button class="go" id="play">Click to play</button>
-    <div class="opts">bots: <a href="?bots=4">4</a><a href="?bots=8">8</a><a href="?bots=12">12</a><a href="?bots=20">20</a></div>
-    <div class="foot">Original work, nothing borrowed. <a href="https://github.com/kevin9327/kevin9327.github.io/tree/main/arena">source</a> · <a href="https://github.com/kevin9327">kevin9327</a></div>
-  </div>
-</div>
+<div id="loading"><i id="load-bar"></i></div>
+
+<div class="hud" id="grab">click to take control &nbsp;·&nbsp; WASD move · mouse look · left click attack · right click other weapon · space jump · shift dash · Q swap · R reload · Tab scores</div>
 
 <div class="overlay" id="dead"><div class="card"><h1>Down</h1><p id="dead-by">taken out</p><p>Respawning in <b id="dead-t">3</b>…</p></div></div>
 
